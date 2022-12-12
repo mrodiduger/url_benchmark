@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from dm_env import specs
 
-import utils
-from agent.ddpg import DDPGAgent
+import url_benchmark.utils as utils
+from url_benchmark.agent.ddpg import DDPGAgent
 
 """
 Reimplementation of https://github.com/RLAgent/state-marginal-matching:
@@ -37,13 +37,18 @@ class VAE(nn.Module):
         self.device = device
 
     def make_networks(self, obs_dim, z_dim, code_dim):
-        self.enc = nn.Sequential(nn.Linear(obs_dim + z_dim, 150), nn.ReLU(),
-                                 nn.Linear(150, 150), nn.ReLU())
+        self.enc = nn.Sequential(
+            nn.Linear(obs_dim + z_dim, 150), nn.ReLU(), nn.Linear(150, 150), nn.ReLU()
+        )
         self.enc_mu = nn.Linear(150, code_dim)
         self.enc_logvar = nn.Linear(150, code_dim)
-        self.dec = nn.Sequential(nn.Linear(code_dim, 150), nn.ReLU(),
-                                 nn.Linear(150, 150), nn.ReLU(),
-                                 nn.Linear(150, obs_dim + z_dim))
+        self.dec = nn.Sequential(
+            nn.Linear(code_dim, 150),
+            nn.ReLU(),
+            nn.Linear(150, 150),
+            nn.ReLU(),
+            nn.Linear(150, obs_dim + z_dim),
+        )
 
     def encode(self, obs_z):
         enc_features = self.enc(obs_z)
@@ -61,50 +66,64 @@ class VAE(nn.Module):
     def loss(self, obs_z):
         epsilon = torch.randn([obs_z.shape[0], self.code_dim]).to(self.device)
         obs_distr_params, (mu, logvar, stds) = self(obs_z, epsilon)
-        kle = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(),
-                               dim=1).mean()
-        log_prob = F.mse_loss(obs_z, obs_distr_params, reduction='none')
+        kle = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
+        log_prob = F.mse_loss(obs_z, obs_distr_params, reduction="none")
 
         loss = self.beta * kle + log_prob.mean()
         return loss, log_prob.sum(list(range(1, len(log_prob.shape)))).view(
-            log_prob.shape[0], 1)
+            log_prob.shape[0], 1
+        )
 
 
 class PVae(VAE):
     def make_networks(self, obs_shape, z_dim, code_dim):
-        self.enc = nn.Sequential(nn.Conv2d(obs_shape[0], 32, 3, stride=2),
-                                 nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-                                 nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-                                 nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
-                                 nn.ReLU(), nn.Flatten(),
-                                 nn.Linear(32 * 35 * 35, 150), nn.ReLU())
+        self.enc = nn.Sequential(
+            nn.Conv2d(obs_shape[0], 32, 3, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(32 * 35 * 35, 150),
+            nn.ReLU(),
+        )
         self.enc_mu = nn.Linear(150, code_dim)
         self.enc_logvar = nn.Linear(150, code_dim)
         self.dec = nn.Sequential(
-            nn.Linear(code_dim, 32 * 35 * 35), nn.ReLU(),
+            nn.Linear(code_dim, 32 * 35 * 35),
+            nn.ReLU(),
             nn.Unflatten(dim=1, unflattened_size=(32, 35, 35)),
-            nn.ConvTranspose2d(32, 32, 3, stride=1), nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, 3, stride=1), nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, 3, stride=1), nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, 3, stride=1), nn.ReLU(),
-            nn.ConvTranspose2d(32, 32, 3, stride=2), nn.ReLU(),
-            nn.Conv2d(32, obs_shape[0], 4, stride=1))
+            nn.ConvTranspose2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 32, 3, stride=1),
+            nn.ReLU(),
+            nn.ConvTranspose2d(32, 32, 3, stride=2),
+            nn.ReLU(),
+            nn.Conv2d(32, obs_shape[0], 4, stride=1),
+        )
 
 
 class SMM(nn.Module):
     def __init__(self, obs_dim, z_dim, hidden_dim, vae_beta, device):
         super().__init__()
         self.z_dim = z_dim
-        self.z_pred_net = nn.Sequential(nn.Linear(obs_dim, hidden_dim),
-                                        nn.ReLU(),
-                                        nn.Linear(hidden_dim, hidden_dim),
-                                        nn.ReLU(),
-                                        nn.Linear(hidden_dim, z_dim))
-        self.vae = VAE(obs_dim=obs_dim,
-                       z_dim=z_dim,
-                       code_dim=128,
-                       vae_beta=vae_beta,
-                       device=device)
+        self.z_pred_net = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, z_dim),
+        )
+        self.vae = VAE(
+            obs_dim=obs_dim, z_dim=z_dim, code_dim=128, vae_beta=vae_beta, device=device
+        )
         self.apply(utils.weight_init)
 
     def predict_logits(self, obs):
@@ -113,18 +132,20 @@ class SMM(nn.Module):
 
     def loss(self, logits, z):
         z_labels = torch.argmax(z, 1)
-        return nn.CrossEntropyLoss(reduction='none')(logits, z_labels)
+        return nn.CrossEntropyLoss(reduction="none")(logits, z_labels)
 
 
 class PSMM(nn.Module):
     def __init__(self, obs_shape, z_dim, hidden_dim, vae_beta, device):
         super().__init__()
         self.z_dim = z_dim
-        self.vae = PVae(obs_dim=obs_shape,
-                        z_dim=z_dim,
-                        code_dim=128,
-                        vae_beta=vae_beta,
-                        device=device)
+        self.vae = PVae(
+            obs_dim=obs_shape,
+            z_dim=z_dim,
+            code_dim=128,
+            vae_beta=vae_beta,
+            device=device,
+        )
         self.apply(utils.weight_init)
 
     # discriminator not needed when n=1, as z is degenerate
@@ -136,9 +157,18 @@ class PSMM(nn.Module):
 
 
 class SMMAgent(DDPGAgent):
-    def __init__(self, z_dim, sp_lr, vae_lr, vae_beta, state_ent_coef,
-                 latent_ent_coef, latent_cond_ent_coef, update_encoder,
-                 **kwargs):
+    def __init__(
+        self,
+        z_dim,
+        sp_lr,
+        vae_lr,
+        vae_beta,
+        state_ent_coef,
+        latent_ent_coef,
+        latent_cond_ent_coef,
+        update_encoder,
+        **kwargs
+    ):
         self.z_dim = z_dim
 
         self.state_ent_coef = state_ent_coef
@@ -149,15 +179,17 @@ class SMMAgent(DDPGAgent):
         kwargs["meta_dim"] = self.z_dim
         super().__init__(**kwargs)
         # self.obs_dim is now the real obs_dim (or repr_dim) + z_dim
-        self.smm = SMM(self.obs_dim - z_dim,
-                       z_dim,
-                       hidden_dim=kwargs['hidden_dim'],
-                       vae_beta=vae_beta,
-                       device=kwargs['device']).to(kwargs['device'])
+        self.smm = SMM(
+            self.obs_dim - z_dim,
+            z_dim,
+            hidden_dim=kwargs["hidden_dim"],
+            vae_beta=vae_beta,
+            device=kwargs["device"],
+        ).to(kwargs["device"])
         self.pred_optimizer = torch.optim.Adam(
-            self.smm.z_pred_net.parameters(), lr=sp_lr)
-        self.vae_optimizer = torch.optim.Adam(self.smm.vae.parameters(),
-                                              lr=vae_lr)
+            self.smm.z_pred_net.parameters(), lr=sp_lr
+        )
+        self.vae_optimizer = torch.optim.Adam(self.smm.vae.parameters(), lr=vae_lr)
 
         self.smm.train()
 
@@ -166,13 +198,13 @@ class SMMAgent(DDPGAgent):
         self.ft_not_finished = [True for z in range(z_dim)]
 
     def get_meta_specs(self):
-        return (specs.Array((self.z_dim,), np.float32, 'z'),)
+        return (specs.Array((self.z_dim,), np.float32, "z"),)
 
     def init_meta(self):
         z = np.zeros(self.z_dim, dtype=np.float32)
         z[np.random.choice(self.z_dim)] = 1.0
         meta = OrderedDict()
-        meta['z'] = z
+        meta["z"] = z
         return meta
 
     def update_meta(self, meta, global_step, time_step):
@@ -185,7 +217,7 @@ class SMMAgent(DDPGAgent):
         return meta
 
     def update_meta_ft(self, meta, global_step, time_step):
-        z_ind = meta['z'].argmax()
+        z_ind = meta["z"].argmax()
         if any(self.ft_not_finished):
             self.ft_returns[z_ind] += time_step.reward
             if time_step.last():
@@ -205,7 +237,7 @@ class SMMAgent(DDPGAgent):
                             not_tried_z -= 1
                 new_z = np.zeros(self.z_dim, dtype=np.float32)
                 new_z[new_z_ind] = 1.0
-                meta['z'] = new_z
+                meta["z"] = new_z
         return meta
 
     def update_vae(self, obs_z):
@@ -219,7 +251,7 @@ class SMMAgent(DDPGAgent):
         if self.encoder_opt is not None:
             self.encoder_opt.step()
 
-        metrics['loss_vae'] = loss.cpu().item()
+        metrics["loss_vae"] = loss.cpu().item()
 
         return metrics, h_s_z
 
@@ -232,7 +264,7 @@ class SMMAgent(DDPGAgent):
         loss.backward()
         self.pred_optimizer.step()
 
-        metrics['loss_pred'] = loss.cpu().item()
+        metrics["loss_pred"] = loss.cpu().item()
 
         return metrics, h_z_s
 
@@ -243,7 +275,8 @@ class SMMAgent(DDPGAgent):
         batch = next(replay_iter)
 
         obs, action, extr_reward, discount, next_obs, z = utils.to_torch(
-            batch, self.device)
+            batch, self.device
+        )
 
         obs = self.aug_and_encode(obs)
         with torch.no_grad():
@@ -258,9 +291,13 @@ class SMMAgent(DDPGAgent):
             h_z = np.log(self.z_dim)  # One-hot z encoding
             h_z *= torch.ones_like(extr_reward).to(self.device)
 
-            pred_log_ratios = self.state_ent_coef * h_s_z.detach(
+            pred_log_ratios = (
+                self.state_ent_coef * h_s_z.detach()
             )  # p^*(s) is ignored, as state space dimension is inaccessible from pixel input
-            intr_reward = pred_log_ratios + self.latent_ent_coef * h_z + self.latent_cond_ent_coef * h_z_s.detach(
+            intr_reward = (
+                pred_log_ratios
+                + self.latent_ent_coef * h_z
+                + self.latent_cond_ent_coef * h_z_s.detach()
             )
             reward = intr_reward
         else:
@@ -269,9 +306,9 @@ class SMMAgent(DDPGAgent):
         if self.use_tb or self.use_wandb:
             metrics.update(vae_metrics)
             metrics.update(pred_metrics)
-            metrics['intr_reward'] = intr_reward.mean().item()
-            metrics['extr_reward'] = extr_reward.mean().item()
-            metrics['batch_reward'] = reward.mean().item()
+            metrics["intr_reward"] = intr_reward.mean().item()
+            metrics["extr_reward"] = extr_reward.mean().item()
+            metrics["batch_reward"] = reward.mean().item()
 
         if not self.update_encoder:
             obs_z = obs_z.detach()
@@ -279,14 +316,17 @@ class SMMAgent(DDPGAgent):
 
         # update critic
         metrics.update(
-            self.update_critic(obs_z.detach(), action, reward, discount,
-                               next_obs_z.detach(), step))
+            self.update_critic(
+                obs_z.detach(), action, reward, discount, next_obs_z.detach(), step
+            )
+        )
 
         # update actor
         metrics.update(self.update_actor(obs_z.detach(), step))
 
         # update critic target
-        utils.soft_update_params(self.critic, self.critic_target,
-                                 self.critic_target_tau)
+        utils.soft_update_params(
+            self.critic, self.critic_target, self.critic_target_tau
+        )
 
         return metrics

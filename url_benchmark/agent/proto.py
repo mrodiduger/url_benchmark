@@ -7,8 +7,8 @@ import torch.nn.functional as F
 from torch import distributions as pyd
 from torch import jit
 
-import utils
-from agent.ddpg import DDPGAgent
+import url_benchmark.utils as utils
+from url_benchmark.agent.ddpg import DDPGAgent
 
 
 @jit.script
@@ -32,8 +32,9 @@ class Projector(nn.Module):
     def __init__(self, pred_dim, proj_dim):
         super().__init__()
 
-        self.trunk = nn.Sequential(nn.Linear(pred_dim, proj_dim), nn.ReLU(),
-                                   nn.Linear(proj_dim, pred_dim))
+        self.trunk = nn.Sequential(
+            nn.Linear(pred_dim, proj_dim), nn.ReLU(), nn.Linear(proj_dim, pred_dim)
+        )
 
         self.apply(utils.weight_init)
 
@@ -42,8 +43,18 @@ class Projector(nn.Module):
 
 
 class ProtoAgent(DDPGAgent):
-    def __init__(self, pred_dim, proj_dim, queue_size, num_protos, tau,
-                 encoder_target_tau, topk, update_encoder, **kwargs):
+    def __init__(
+        self,
+        pred_dim,
+        proj_dim,
+        queue_size,
+        num_protos,
+        tau,
+        encoder_target_tau,
+        topk,
+        update_encoder,
+        **kwargs
+    ):
         super().__init__(**kwargs)
         self.tau = tau
         self.encoder_target_tau = encoder_target_tau
@@ -62,8 +73,7 @@ class ProtoAgent(DDPGAgent):
         self.projector.apply(utils.weight_init)
 
         # prototypes
-        self.protos = nn.Linear(pred_dim, num_protos,
-                                bias=False).to(self.device)
+        self.protos = nn.Linear(pred_dim, num_protos, bias=False).to(self.device)
         self.protos.apply(utils.weight_init)
 
         # candidate queue
@@ -71,10 +81,15 @@ class ProtoAgent(DDPGAgent):
         self.queue_ptr = 0
 
         # optimizers
-        self.proto_opt = torch.optim.Adam(utils.chain(
-            self.encoder.parameters(), self.predictor.parameters(),
-            self.projector.parameters(), self.protos.parameters()),
-                                          lr=self.lr)
+        self.proto_opt = torch.optim.Adam(
+            utils.chain(
+                self.encoder.parameters(),
+                self.predictor.parameters(),
+                self.projector.parameters(),
+                self.protos.parameters(),
+            ),
+            lr=self.lr,
+        )
 
         self.predictor.train()
         self.projector.train()
@@ -108,7 +123,7 @@ class ProtoAgent(DDPGAgent):
 
         # enqueue candidates
         ptr = self.queue_ptr
-        self.queue[ptr:ptr + self.num_protos] = z[candidates]
+        self.queue[ptr : ptr + self.num_protos] = z[candidates]
         self.queue_ptr = (ptr + self.num_protos) % self.queue.shape[0]
 
         # compute distances between the batch and the queue of candidates
@@ -143,7 +158,7 @@ class ProtoAgent(DDPGAgent):
         # loss
         loss = -(q_t * log_p_s).sum(dim=1).mean()
         if self.use_tb or self.use_wandb:
-            metrics['repr_loss'] = loss.item()
+            metrics["repr_loss"] = loss.item()
         self.proto_opt.zero_grad(set_to_none=True)
         loss.backward()
         self.proto_opt.step()
@@ -158,7 +173,8 @@ class ProtoAgent(DDPGAgent):
 
         batch = next(replay_iter)
         obs, action, extr_reward, discount, next_obs = utils.to_torch(
-            batch, self.device)
+            batch, self.device
+        )
 
         # augment and encode
         with torch.no_grad():
@@ -172,14 +188,14 @@ class ProtoAgent(DDPGAgent):
                 intr_reward = self.compute_intr_reward(next_obs, step)
 
             if self.use_tb or self.use_wandb:
-                metrics['intr_reward'] = intr_reward.mean().item()
+                metrics["intr_reward"] = intr_reward.mean().item()
             reward = intr_reward
         else:
             reward = extr_reward
 
         if self.use_tb or self.use_wandb:
-            metrics['extr_reward'] = extr_reward.mean().item()
-            metrics['batch_reward'] = reward.mean().item()
+            metrics["extr_reward"] = extr_reward.mean().item()
+            metrics["batch_reward"] = reward.mean().item()
 
         obs = self.encoder(obs)
         next_obs = self.encoder(next_obs)
@@ -190,18 +206,23 @@ class ProtoAgent(DDPGAgent):
 
         # update critic
         metrics.update(
-            self.update_critic(obs.detach(), action, reward, discount,
-                               next_obs.detach(), step))
+            self.update_critic(
+                obs.detach(), action, reward, discount, next_obs.detach(), step
+            )
+        )
 
         # update actor
         metrics.update(self.update_actor(obs.detach(), step))
 
         # update critic target
-        utils.soft_update_params(self.encoder, self.encoder_target,
-                                 self.encoder_target_tau)
-        utils.soft_update_params(self.predictor, self.predictor_target,
-                                 self.encoder_target_tau)
-        utils.soft_update_params(self.critic, self.critic_target,
-                                 self.critic_target_tau)
+        utils.soft_update_params(
+            self.encoder, self.encoder_target, self.encoder_target_tau
+        )
+        utils.soft_update_params(
+            self.predictor, self.predictor_target, self.encoder_target_tau
+        )
+        utils.soft_update_params(
+            self.critic, self.critic_target, self.critic_target_tau
+        )
 
         return metrics
